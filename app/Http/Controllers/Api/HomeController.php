@@ -13,8 +13,11 @@ class HomeController extends Controller
         $month = now()->month;
         $year = now()->year;
 
-        // 1. Net Worth (Total of all accounts)
-        $netWorth = $ledger->accounts()->sum('balance');
+        // 1. Net Worth (Total of all accounts). `balance` is a computed accessor
+        // (base_balance + transaction effects), not the stale `balance` DB column,
+        // so accounts must be loaded as models rather than summed via SQL.
+        $accounts = \App\Models\Account::withComputedBalances($ledger->accounts);
+        $netWorth = $accounts->sum('balance');
         $totalTxCount = $ledger->transactions()->count();
 
         // 2. Monthly Stats Grid
@@ -32,7 +35,7 @@ class HomeController extends Controller
         return response()->json([
             'net_worth' => (float)$netWorth,
             'total_tx_count' => $totalTxCount,
-            'accounts' => $ledger->accounts,
+            'accounts' => $accounts,
             'stats' => [
                 ['label' => 'Expense', 'value' => $expense, 'color' => 'text-red-400', 'count' => $monthlyTransactions->where('type', 'expense')->count()],
                 ['label' => 'Income', 'value' => $income, 'color' => 'text-green-400', 'count' => $monthlyTransactions->where('type', 'income')->count()],

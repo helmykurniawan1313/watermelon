@@ -18,13 +18,17 @@ class Transaction extends Model
         'amount',
         'date',
         'title',
+        'notes',
         'type',
     ];
 
     protected $casts = [
         // Changed to 'datetime' so we keep the exact time you bought something
-        'date' => 'datetime', 
+        'date' => 'datetime',
     ];
+
+    // Loaded internally for authorization checks; never serialize the parent ledger (and its user list) back to clients.
+    protected $hidden = ['ledger'];
 
     /**
      * The account (Bank/Wallet) this money came from or went to.
@@ -54,9 +58,9 @@ class Transaction extends Model
         return $this->belongsTo(Installment::class);
     }
     public function toAccount()
-{
-    return $this->belongsTo(Account::class, 'to_account_id');
-}
+    {
+        return $this->belongsTo(Account::class, 'to_account_id');
+    }
 // Add this to the bottom of your Transaction model
     protected function serializeDate(\DateTimeInterface $date)
     {

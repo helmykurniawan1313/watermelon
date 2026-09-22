@@ -16,9 +16,7 @@ class TransactionController extends Controller
      */
     public function index(Request $request, Ledger $ledger)
     {
-        if (!$ledger->users->contains($request->user())) {
-            return response()->json(['error' => 'Unauthorized access.'], 403);
-        }
+        $this->authorizeLedger($ledger);
 
         $transactions = $ledger->transactions()
             ->with(['category', 'user', 'account', 'toAccount']) // Added toAccount for transfers
@@ -33,23 +31,20 @@ class TransactionController extends Controller
      */
     public function store(Request $request, Ledger $ledger)
     {
-        if (!$ledger->users->contains($request->user())) {
-            return response()->json(['error' => 'Unauthorized access.'], 403);
-        }
+        $this->authorizeLedger($ledger);
 
         $validated = $request->validate([
             'title'         => 'required|string|max:255',
             'amount'        => 'required|numeric|min:0',
             'type'          => 'required|in:income,expense,transfer',
             'date'          => 'required',
-            'account_id'    => 'required|exists:accounts,id',
-            'to_account_id' => 'required_if:type,transfer|nullable|exists:accounts,id',
-            'category_id'   => 'required_unless:type,transfer|nullable|exists:categories,id',
+            'account_id'    => 'required|exists:accounts,id,ledger_id,' . $ledger->id,
+            'to_account_id' => 'required_if:type,transfer|nullable|exists:accounts,id,ledger_id,' . $ledger->id,
+            'category_id'   => 'required_unless:type,transfer|nullable|exists:categories,id,ledger_id,' . $ledger->id,
             'notes'         => 'nullable|string',
         ]);
 
         return DB::transaction(function () use ($request, $ledger, $validated) {
-            // 1. Create the transaction
             $transaction = $ledger->transactions()->create([
                 'user_id'       => $request->user()->id,
                 'account_id'    => $validated['account_id'],
@@ -61,19 +56,6 @@ class TransactionController extends Controller
                 'notes'         => $validated['notes'] ?? null,
                 'type'          => $validated['type'],
             ]);
-
-            // 2. CASHEW MAGIC: Update Balances
-            $sourceAccount = Account::find($validated['account_id']);
-
-            if ($validated['type'] === 'transfer') {
-                $destAccount = Account::find($validated['to_account_id']);
-                $sourceAccount->decrement('balance', $validated['amount']);
-                $destAccount->increment('balance', $validated['amount']);
-            } elseif ($validated['type'] === 'expense') {
-                $sourceAccount->decrement('balance', $validated['amount']);
-            } else {
-                $sourceAccount->increment('balance', $validated['amount']);
-            }
 
             return response()->json([
                 'message' => 'Transaction logged successfully!',
@@ -87,42 +69,30 @@ class TransactionController extends Controller
      */
     public function update(Request $request, Transaction $transaction)
     {
+        $this->authorizeLedger($transaction->ledger);
+
+        $ledgerId = $transaction->ledger_id;
+
         $validated = $request->validate([
             'title'         => 'required|string',
             'amount'        => 'required|numeric',
             'type'          => 'required|in:income,expense,transfer',
-            'account_id'    => 'required|exists:accounts,id',
-            'to_account_id' => 'required_if:type,transfer|nullable|exists:accounts,id',
-            'category_id'   => 'required_unless:type,transfer|nullable|exists:categories,id',
+            'account_id'    => 'required|exists:accounts,id,ledger_id,' . $ledgerId,
+            'to_account_id' => 'required_if:type,transfer|nullable|exists:accounts,id,ledger_id,' . $ledgerId,
+            'category_id'   => 'required_unless:type,transfer|nullable|exists:categories,id,ledger_id,' . $ledgerId,
             'date'          => 'required',
+            'notes'         => 'nullable|string',
         ]);
 
         return DB::transaction(function () use ($transaction, $validated) {
-            // 1. REVERT OLD BALANCES
-            $oldSource = Account::find($transaction->account_id);
-            if ($transaction->type === 'transfer') {
-                $oldDest = Account::find($transaction->to_account_id);
-                $oldSource->increment('balance', $transaction->amount);
-                $oldDest->decrement('balance', $transaction->amount);
-            } elseif ($transaction->type === 'expense') {
-                $oldSource->increment('balance', $transaction->amount);
-            } else {
-                $oldSource->decrement('balance', $transaction->amount);
-            }
+            $oldAmount = $transaction->amount;
+            $installment = $transaction->installment_id ? $transaction->installment()->lockForUpdate()->first() : null;
 
-            // 2. UPDATE TRANSACTION DATA
             $transaction->update($validated);
 
-            // 3. APPLY NEW BALANCES
-            $newSource = Account::find($validated['account_id']);
-            if ($validated['type'] === 'transfer') {
-                $newDest = Account::find($validated['to_account_id']);
-                $newSource->decrement('balance', $validated['amount']);
-                $newDest->increment('balance', $validated['amount']);
-            } elseif ($validated['type'] === 'expense') {
-                $newSource->decrement('balance', $validated['amount']);
-            } else {
-                $newSource->increment('balance', $validated['amount']);
+            if ($installment) {
+                $installment->paid_amount = max(0, $installment->paid_amount - $oldAmount + $transaction->amount);
+                $installment->save();
             }
 
             return response()->json($transaction->load('category', 'account', 'toAccount'));
@@ -132,83 +102,56 @@ class TransactionController extends Controller
     /**
      * Delete a transaction and revert balances.
      */
-   public function destroy($id)
-{
-    $transaction = \App\Models\Transaction::findOrFail($id);
+    public function destroy(Request $request, Transaction $transaction)
+    {
+        $this->authorizeLedger($transaction->ledger);
 
-    // --- 1. REFUND THE BANK ACCOUNT BALANCE ---
-    $account = \App\Models\Account::find($transaction->account_id);
-    if ($account) {
-        // If it was an expense (like a Cicilan payment), give the money back (+)
-        if ($transaction->type === 'expense') {
-            $account->balance += $transaction->amount;
-        } 
-        // If it was income, take the money back (-)
-        elseif ($transaction->type === 'income') {
-            $account->balance -= $transaction->amount;
-        } 
-        // If it was a transfer, rewind both accounts
-        elseif ($transaction->type === 'transfer') {
-            $account->balance += $transaction->amount; // Give back to sender
-            
-            $toAccount = \App\Models\Account::find($transaction->to_account_id);
-            if ($toAccount) {
-                $toAccount->balance -= $transaction->amount; // Take from receiver
-                $toAccount->save();
+        return DB::transaction(function () use ($transaction) {
+            // If this was an installment payment, roll back its progress too.
+            if ($transaction->installment_id) {
+                $installment = $transaction->installment;
+                if ($installment) {
+                    $installment->paid_amount = max(0, $installment->paid_amount - $transaction->amount);
+                    $installment->save();
+                }
             }
-        }
-        $account->save();
+
+            $transaction->delete();
+
+            return response()->json(['message' => 'Transaction deleted successfully']);
+        });
     }
 
-    // --- 2. THE SMARTER TITLE DETECTIVE (Rewind Cicilan) ---
-    if (str_contains($transaction->title, 'Cicilan')) {
-        
-        // Clean the title
-        $baseTitle = str_replace(' (Cicilan Payment)', '', $transaction->title);
-        $baseTitle = str_replace('Cicilan: ', '', $baseTitle); 
-        $baseTitle = trim($baseTitle); 
+    public function activeMonths(Request $request, Ledger $ledger)
+    {
+        $this->authorizeLedger($ledger);
 
-        // Find the matching Installment
-        $installment = \App\Models\Installment::where('title', $baseTitle)
-                            ->where('account_id', $transaction->account_id)
-                            ->first();
-
-        // If found, rewind the progress bar!
-        if ($installment) {
-            $installment->paid_amount -= $transaction->amount;
-            
-            if ($installment->paid_amount < 0) {
-                $installment->paid_amount = 0;
-            }
-            
-            $installment->save();
-        }
+        // This finds every unique Month/Year combo in your transactions
+        return $ledger->transactions()
+            ->selectRaw('MONTH(date) as month, YEAR(date) as year')
+            ->distinct()
+            ->orderBy('year', 'desc')
+            ->orderBy('month', 'desc')
+            ->get();
     }
 
-    // --- 3. FINALLY, DELETE THE RECORD ---
-    $transaction->delete();
+    public function netWorthTrend(Request $request, Ledger $ledger)
+    {
+        $this->authorizeLedger($ledger);
+        $ledgerId = $ledger->id;
 
-    return response()->json(['message' => 'Transaction deleted successfully']);
-}
-public function activeMonths($ledgerId)
-{
-    // This finds every unique Month/Year combo in your transactions
-    return \App\Models\Transaction::where('ledger_id', $ledgerId)
-        ->selectRaw('MONTH(date) as month, YEAR(date) as year')
-        ->distinct()
-        ->orderBy('year', 'desc')
-        ->orderBy('month', 'desc')
-        ->get();
-}
-public function netWorthTrend($ledgerId)
-{
-    // 1. Get current total net worth right now
-    $currentNetWorth = \App\Models\Account::where('ledger_id', $ledgerId)->sum('balance');
+        // 1. Get current total net worth right now (must load models, not a raw SQL sum,
+        // since `balance` is now a computed accessor that excludes future-dated transactions).
+        $currentNetWorth = \App\Models\Account::withComputedBalances(
+            \App\Models\Account::where('ledger_id', $ledgerId)->get()
+        )->sum('balance');
 
-    // 2. Get all income and expenses from the last 30 days
+    // 2. Get all income and expenses from the last 30 days (excluding future-dated transactions,
+    // which don't affect net worth until their date arrives).
     $startDate = now()->subDays(30)->startOfDay();
     $transactions = \App\Models\Transaction::where('ledger_id', $ledgerId)
         ->where('date', '>=', $startDate)
+        ->where('date', '<=', now())
         ->whereIn('type', ['income', 'expense']) // Transfers don't change net worth!
         ->get();
 

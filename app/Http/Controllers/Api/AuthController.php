@@ -77,4 +77,49 @@ class AuthController extends Controller
             'message' => 'Logged out successfully'
         ]);
     }
+
+    /**
+     * Update the authenticated user's name and/or email.
+     */
+    public function updateProfile(Request $request)
+    {
+        $user = $request->user();
+
+        $validated = $request->validate([
+            'name' => 'required|string|max:255',
+            'email' => 'required|string|email|max:255|unique:users,email,' . $user->id,
+        ]);
+
+        $user->update($validated);
+
+        return response()->json([
+            'message' => 'Profile updated successfully',
+            'user' => $user,
+        ]);
+    }
+
+    /**
+     * Change the authenticated user's password.
+     */
+    public function updatePassword(Request $request)
+    {
+        $user = $request->user();
+
+        $validated = $request->validate([
+            'current_password' => 'required|string',
+            'password' => 'required|string|min:8|confirmed',
+        ]);
+
+        if (!Hash::check($validated['current_password'], $user->password)) {
+            return response()->json([
+                'error' => 'Current password is incorrect.'
+            ], 422);
+        }
+
+        $user->update(['password' => Hash::make($validated['password'])]);
+
+        return response()->json([
+            'message' => 'Password updated successfully',
+        ]);
+    }
 }

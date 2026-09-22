@@ -1,45 +1,62 @@
 <?php
 
-namespace App\Models;
+namespace App\Http\Controllers\Api;
 
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Factories\HasFactory;
+use App\Http\Controllers\Controller;
+use App\Models\Ledger;
+use App\Models\User;
+use Illuminate\Http\Request;
 
-class Ledger extends Model
+class LedgerController extends Controller
 {
-    use HasFactory;
-
-    protected $fillable = ['name', 'currency_code'];
-
     /**
-     * The users that belong to the ledger.
+     * List all ledgers the current user belongs to.
      */
-    public function users()
+    public function index(Request $request)
     {
-        return $this->belongsToMany(User::class)->withPivot('role')->withTimestamps();
+        return response()->json($request->user()->ledgers);
     }
 
     /**
-     * ADD THIS: The accounts that belong to the ledger.
+     * Create a new ledger and attach the creator as its owner.
      */
-    public function accounts()
+    public function store(Request $request)
     {
-        return $this->hasMany(Account::class);
+        $validated = $request->validate([
+            'name' => 'required|string|max:255',
+            'currency' => 'nullable|string|max:10',
+        ]);
+
+        $ledger = Ledger::create([
+            'name' => $validated['name'],
+            'currency' => $validated['currency'] ?? 'IDR',
+        ]);
+
+        $ledger->users()->attach($request->user()->id, ['role' => 'owner']);
+
+        return response()->json($ledger, 201);
     }
 
     /**
-     * ADD THIS: The categories that belong to the ledger.
+     * Share a ledger with another user by email.
      */
-    public function categories()
+    public function addUser(Request $request, Ledger $ledger)
     {
-        return $this->hasMany(Category::class);
-    }
+        $this->authorizeLedger($ledger);
 
-    /**
-     * The transactions that belong to the ledger.
-     */
-    public function transactions()
-    {
-        return $this->hasMany(Transaction::class);
+        $validated = $request->validate([
+            'email' => 'required|email|exists:users,email',
+            'role' => 'nullable|string|in:owner,member',
+        ]);
+
+        $user = User::where('email', $validated['email'])->firstOrFail();
+
+        if ($ledger->users->contains($user->id)) {
+            return response()->json(['error' => 'User already has access to this ledger.'], 422);
+        }
+
+        $ledger->users()->attach($user->id, ['role' => $validated['role'] ?? 'member']);
+
+        return response()->json(['message' => 'User added to ledger successfully.']);
     }
 }

@@ -14,12 +14,16 @@ class ReportController extends Controller
      */
    public function summary(Request $request, Ledger $ledger)
 {
+    $this->authorizeLedger($ledger);
+
     // 1. Get month/year from query, or default to current
     $month = $request->query('month', now()->month);
     $year = $request->query('year', now()->year);
 
-    // 2. Net Worth: Sum of all account balances in this ledger
-    $netWorth = $ledger->accounts()->sum('balance');
+    // 2. Net Worth: Sum of all account balances in this ledger.
+    // Must load models (not a raw SQL sum), since `balance` is a computed accessor
+    // that excludes future-dated transactions.
+    $netWorth = \App\Models\Account::withComputedBalances($ledger->accounts()->get())->sum('balance');
 
     // 3. Transactions for the selected period
     $transactions = $ledger->transactions()

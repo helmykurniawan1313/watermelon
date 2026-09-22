@@ -9,17 +9,22 @@ use App\Http\Controllers\Api\InstallmentController;
 use Illuminate\Support\Facades\Route;
 
 // Public Routes
-Route::post('/register', [AuthController::class, 'register']);
-Route::post('/login', [AuthController::class, 'login']);
+Route::middleware('throttle:6,1')->group(function () {
+    Route::post('/register', [AuthController::class, 'register']);
+    Route::post('/login', [AuthController::class, 'login']);
+});
 
 // Protected Routes
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
+    Route::get('/user', function (Illuminate\Http\Request $request) { return $request->user(); });
+    Route::put('/user', [AuthController::class, 'updateProfile']);
+    Route::put('/user/password', [AuthController::class, 'updatePassword']);
     Route::apiResource('accounts', App\Http\Controllers\Api\AccountController::class)->only(['update', 'destroy']);
     Route::apiResource('transactions', App\Http\Controllers\Api\TransactionController::class)->only(['update', 'destroy']);
     Route::apiResource('categories', CategoryController::class);
-    // Add this line to your routes/api.php
-Route::delete('installments/{id}', [App\Http\Controllers\Api\InstallmentController::class, 'destroy']);
+    Route::put('installments/{id}', [App\Http\Controllers\Api\InstallmentController::class, 'update']);
+    Route::delete('installments/{id}', [App\Http\Controllers\Api\InstallmentController::class, 'destroy']);
 
     // Ledgers & Sharing
     Route::get('/ledgers', [LedgerController::class, 'index']);
@@ -31,10 +36,6 @@ Route::delete('installments/{id}', [App\Http\Controllers\Api\InstallmentControll
     // Categories
     Route::get('/ledgers/{ledger}/categories', [CategoryController::class, 'index']);
     Route::post('/ledgers/{ledger}/categories', [CategoryController::class, 'store']);
-    Route::delete('/categories/{category}', function (\App\Models\Category $category) {
-        $category->delete();
-        return response()->json(['message' => 'Deleted']);
-    });
 
     // Transactions & Dashboard
     Route::get('/ledgers/{ledger}/transactions', [TransactionController::class, 'index']);
@@ -49,4 +50,10 @@ Route::post('/ledgers/{ledger}/accounts', [App\Http\Controllers\Api\AccountContr
     Route::post('installments/{installment}/pay', [App\Http\Controllers\Api\InstallmentController::class, 'pay']);
 
     Route::post('/accounts/reorder', [App\Http\Controllers\Api\AccountController::class, 'reorder']);
+
+    // AI-assisted quick add (parses free text into a draft transaction; never saves directly)
+    Route::middleware('throttle:20,1')->post(
+        '/ledgers/{ledger}/parse-transaction',
+        [App\Http\Controllers\Api\AiParseController::class, 'parseTransaction']
+    );
 });

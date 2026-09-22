@@ -14,9 +14,7 @@ class CategoryController extends Controller
      */
     public function index(Request $request, Ledger $ledger)
     {
-        if (!$ledger->users->contains($request->user())) {
-            return response()->json(['error' => 'Unauthorized access.'], 403);
-        }
+        $this->authorizeLedger($ledger);
 
         return response()->json($ledger->categories);
     }
@@ -26,15 +24,17 @@ class CategoryController extends Controller
      */
   public function store(Request $request, Ledger $ledger)
 {
+    $this->authorizeLedger($ledger);
+
     $validated = $request->validate([
         'name' => 'required|string',
         'icon' => 'required|string',
         'color' => 'required|string',
-        'type' => 'required|in:income,expense',
+        'type' => 'nullable|in:income,expense,both',
     ]);
 
     // This creates the category ALREADY linked to the ledger from the URL
-    $category = $ledger->categories()->create($validated);
+    $category = $ledger->categories()->create($validated + ['type' => $validated['type'] ?? 'both']);
 
     return response()->json($category, 201);
 }
@@ -45,13 +45,11 @@ class CategoryController extends Controller
     public function update(Request $request, Category $category)
     {
         // Check if user has access to the ledger this category belongs to
-        if (!$category->ledger->users->contains($request->user())) {
-            return response()->json(['error' => 'Unauthorized access.'], 403);
-        }
+        $this->authorizeLedger($category->ledger);
 
         $validated = $request->validate([
             'name' => 'required|string|max:255',
-            'type' => 'required|in:income,expense',
+            'type' => 'nullable|in:income,expense,both',
             'icon' => 'nullable|string',
             'color' => 'nullable|string',
         ]);
@@ -69,9 +67,7 @@ class CategoryController extends Controller
      */
     public function destroy(Request $request, Category $category)
     {
-        if (!$category->ledger->users->contains($request->user())) {
-            return response()->json(['error' => 'Unauthorized access.'], 403);
-        }
+        $this->authorizeLedger($category->ledger);
 
         // Note: You might want to prevent deletion if transactions exist, 
         // or handle them via cascading deletes in the database.

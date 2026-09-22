@@ -16,11 +16,13 @@ class InstallmentController extends Controller
      */
     public function index(Request $request, Ledger $ledger)
     {
-        // Removed the security check temporarily to ensure it loads (add back if you are passing the Ledger properly)
-        // Ordered by start_date because next_due_date does not exist in your database
+        $this->authorizeLedger($ledger);
+
+        // Ordered by start_date (no next_due_date field is tracked)
         $installments = \App\Models\Installment::where('ledger_id', $ledger->id)
                             ->orderBy('start_date', 'asc')
                             ->with(['account']) // Load the account relationship so the UI shows the bank name
+                            ->withCount('transactions')
                             ->get();
 
         return response()->json($installments);
@@ -34,13 +36,20 @@ class InstallmentController extends Controller
         $validated = $request->validate([
             'title' => 'required|string',
             'base_price' => 'required|numeric',
-            'duration_months' => 'required|integer', 
+            'duration_months' => 'required|integer',
             'monthly_amount' => 'required|numeric',
             'interest_rate' => 'nullable|numeric',
             'start_date' => 'required|date',
             'account_id' => 'required|exists:accounts,id',
             'category_id' => 'required|exists:categories,id',
             'ledger_id' => 'required|exists:ledgers,id',
+        ]);
+
+        $this->authorizeLedger(Ledger::findOrFail($validated['ledger_id']));
+
+        $request->validate([
+            'account_id' => 'exists:accounts,id,ledger_id,' . $validated['ledger_id'],
+            'category_id' => 'exists:categories,id,ledger_id,' . $validated['ledger_id'],
         ]);
 
         // Automatically calculate total_amount so it doesn't show as NULL in the database
@@ -64,56 +73,68 @@ class InstallmentController extends Controller
     }
 
     /**
-     * Log a payment against the installment and create a transaction.
+     * Log a payment against the installment: creates a real expense transaction,
+     * debits the account, and advances the progress bar.
      */
-   public function pay($id)
-{
-    $installment = \App\Models\Installment::findOrFail($id);
-    
-    // Just increase the progress bar, nothing else!
-    $installment->paid_amount += $installment->monthly_amount;
-    $installment->save();
+    public function pay(Request $request, $id)
+    {
+        $installment = \App\Models\Installment::findOrFail($id);
+        $this->authorizeLedger($installment->ledger);
 
-    return response()->json(['message' => 'Progress updated']);
-}
+        return DB::transaction(function () use ($installment) {
+            $installment = \App\Models\Installment::where('id', $installment->id)->lockForUpdate()->firstOrFail();
 
-    /**
-     * Delete an installment
-     */
-    public function destroy($id)
-{
-    // 1. Find the Cicilan we want to delete
-    $installment = \App\Models\Installment::findOrFail($id);
-    
-    // 2. Find the connected Bank Account
-    $account = \App\Models\Account::find($installment->account_id);
+            if ($installment->paid_amount >= $installment->total_amount) {
+                abort(response()->json(['error' => 'Installment is already fully paid.'], 422));
+            }
 
-    // 3. Find ALL transactions in History related to this specific Cicilan
-    // We check both naming styles just to be safe!
-    $transactions = \App\Models\Transaction::where('account_id', $installment->account_id)
-        ->where(function($query) use ($installment) {
-            $query->where('title', $installment->title . ' (Cicilan Payment)')
-                  ->orWhere('title', 'Cicilan: ' . $installment->title);
-        })->get();
+            $amount = min($installment->monthly_amount, $installment->total_amount - $installment->paid_amount);
 
-    // 4. Loop through every payment we found and REFUND it
-    foreach ($transactions as $tx) {
-        if ($account && $tx->type === 'expense') {
-            // Give the money back to the account (+)
-            $account->balance += $tx->amount;
-            $account->save();
-        }
-        // Erase the transaction from the History tab
-        $tx->delete();
+            $cicilanCategoryId = \App\Models\Category::where('ledger_id', $installment->ledger_id)
+                ->where('name', 'Cicilan')
+                ->value('id') ?? $installment->category_id;
+
+            $transaction = \App\Models\Transaction::create([
+                'ledger_id'      => $installment->ledger_id,
+                'account_id'     => $installment->account_id,
+                'user_id'        => request()->user()->id,
+                'category_id'    => $cicilanCategoryId,
+                'installment_id' => $installment->id,
+                'amount'         => $amount,
+                'date'           => now(),
+                'title'          => $installment->title . ' (Installment Payment)',
+                'type'           => 'expense',
+            ]);
+
+            $installment->paid_amount += $amount;
+            $installment->save();
+
+            return response()->json([
+                'message' => 'Payment logged successfully',
+                'installment' => $installment,
+                'transaction' => $transaction,
+            ]);
+        });
     }
 
-    // 5. Finally, delete the Cicilan itself
-    $installment->delete();
+    /**
+     * Delete an installment, refunding any payments made through it.
+     */
+    public function destroy($id)
+    {
+        $installment = \App\Models\Installment::findOrFail($id);
+        $this->authorizeLedger($installment->ledger);
 
-    return response()->json([
-        'message' => 'Installment deleted, and all payments were refunded!'
-    ]);
-}
+        DB::transaction(function () use ($installment) {
+            \App\Models\Transaction::where('installment_id', $installment->id)->delete();
+
+            $installment->delete();
+        });
+
+        return response()->json([
+            'message' => 'Installment deleted, and all payments were refunded!'
+        ]);
+    }
 
     /**
      * Update an installment
@@ -121,6 +142,7 @@ class InstallmentController extends Controller
     public function update(Request $request, $id)
     {
         $installment = Installment::findOrFail($id);
+        $this->authorizeLedger($installment->ledger);
 
         $validated = $request->validate([
             'title' => 'required|string',
@@ -129,8 +151,8 @@ class InstallmentController extends Controller
             'monthly_amount' => 'required|numeric',
             'interest_rate' => 'nullable|numeric',
             'start_date' => 'required|date',
-            'account_id' => 'required|exists:accounts,id',
-            'category_id' => 'required|exists:categories,id',
+            'account_id' => 'required|exists:accounts,id,ledger_id,' . $installment->ledger_id,
+            'category_id' => 'required|exists:categories,id,ledger_id,' . $installment->ledger_id,
         ]);
 
         $total_amount = $validated['monthly_amount'] * $validated['duration_months'];

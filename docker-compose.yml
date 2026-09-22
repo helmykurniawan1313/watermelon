@@ -1,0 +1,54 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    container_name: watermelon-app
+    restart: unless-stopped
+    working_dir: /var/www/html
+    volumes:
+      - ./storage:/var/www/html/storage
+    networks:
+      - watermelon
+    depends_on:
+      db:
+        condition: service_healthy
+
+  webserver:
+    image: nginx:alpine
+    container_name: watermelon-nginx
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8007:80"
+    volumes:
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./public:/var/www/html/public:ro
+      - ./frontend-dist:/var/www/html/public-spa:ro
+    depends_on:
+      - app
+    networks:
+      - watermelon
+
+  db:
+    image: mysql:8.0
+    container_name: watermelon-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+      MYSQL_DATABASE: watermelon
+    volumes:
+      - watermelon-mysql-data:/var/lib/mysql
+    networks:
+      - watermelon
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+networks:
+  watermelon:
+    driver: bridge
+
+volumes:
+  watermelon-mysql-data:

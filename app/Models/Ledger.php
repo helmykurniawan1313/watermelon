@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class Ledger extends Model
 {
     // Allow these fields to be saved in mass
-    protected $fillable = ['name', 'currency_code'];
+    protected $fillable = ['name', 'currency'];
 
     /**
      * The users that belong to this ledger.

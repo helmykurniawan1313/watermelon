@@ -33,13 +33,15 @@ class AiParseController extends Controller
         $prompt = $this->buildPrompt($validated['text'], $accounts, $categories);
 
         $attempts = [];
-        $result = $this->tryUserKeys($request->user(), $prompt, $validated['provider'] ?? 'auto', $attempts)
-            ?? $this->tryGemini($prompt, config('services.gemini.key'), config('services.gemini.model'), 'Gemini (default)', $attempts)
-            ?? $this->tryGroq($prompt, config('services.groq.key'), config('services.groq.model'), 'Groq (default)', $attempts);
+        $result = $this->tryUserKeys($request->user(), $prompt, $validated['provider'] ?? 'auto', $attempts);
 
         if (!$result) {
+            $message = empty($attempts)
+                ? 'No AI API key configured. Add one in Settings → AI API Keys.'
+                : 'Could not parse that right now. Please fill the form manually or try again.';
+
             return response()->json([
-                'error' => 'Could not parse that right now. Please fill the form manually or try again.',
+                'error' => $message,
                 'ai_report' => $attempts,
             ], 502);
         }

@@ -35,13 +35,14 @@ return [
         ],
     ],
 
+    // Gemini/Groq/OpenRouter API keys are user-managed (see UserApiKey) — no app-wide
+    // default key or env config here. These are just fallback model names used when
+    // a user's key doesn't specify its own model.
     'gemini' => [
-        'key' => env('GEMINI_API_KEY'),
         'model' => env('GEMINI_MODEL', 'gemini-2.0-flash'),
     ],
 
     'groq' => [
-        'key' => env('GROQ_API_KEY'),
         'model' => env('GROQ_MODEL', 'llama-3.3-70b-versatile'),
     ],
 

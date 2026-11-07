@@ -56,4 +56,10 @@ Route::post('/ledgers/{ledger}/accounts', [App\Http\Controllers\Api\AccountContr
         '/ledgers/{ledger}/parse-transaction',
         [App\Http\Controllers\Api\AiParseController::class, 'parseTransaction']
     );
+
+    // User-managed AI API keys (multiple providers, multiple keys, failover order)
+    Route::get('/api-keys', [App\Http\Controllers\Api\UserApiKeyController::class, 'index']);
+    Route::post('/api-keys', [App\Http\Controllers\Api\UserApiKeyController::class, 'store']);
+    Route::put('/api-keys/{apiKey}', [App\Http\Controllers\Api\UserApiKeyController::class, 'update']);
+    Route::delete('/api-keys/{apiKey}', [App\Http\Controllers\Api\UserApiKeyController::class, 'destroy']);
 });

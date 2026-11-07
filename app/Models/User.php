@@ -34,4 +34,9 @@ class User extends Authenticatable
     {
         return $this->belongsToMany(Ledger::class)->withPivot('role')->withTimestamps();
     }
+
+    public function apiKeys()
+    {
+        return $this->hasMany(UserApiKey::class)->orderBy('priority');
+    }
 }

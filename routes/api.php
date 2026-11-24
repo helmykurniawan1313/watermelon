@@ -22,14 +22,22 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/user/password', [AuthController::class, 'updatePassword']);
     Route::apiResource('accounts', App\Http\Controllers\Api\AccountController::class)->only(['update', 'destroy']);
     Route::apiResource('transactions', App\Http\Controllers\Api\TransactionController::class)->only(['update', 'destroy']);
-    Route::apiResource('categories', CategoryController::class);
+    Route::apiResource('categories', CategoryController::class)->only(['update', 'destroy']);
     Route::put('installments/{id}', [App\Http\Controllers\Api\InstallmentController::class, 'update']);
     Route::delete('installments/{id}', [App\Http\Controllers\Api\InstallmentController::class, 'destroy']);
 
     // Ledgers & Sharing
     Route::get('/ledgers', [LedgerController::class, 'index']);
     Route::post('/ledgers', [LedgerController::class, 'store']);
-    Route::post('/ledgers/{ledger}/users', [LedgerController::class, 'addUser']);
+    Route::put('/ledgers/{ledger}', [LedgerController::class, 'update']);
+    Route::get('/ledgers/{ledger}/activity', [LedgerController::class, 'activity']);
+    Route::delete('/ledgers/{ledger}/members/{user}', [LedgerController::class, 'removeMember']);
+    // Partner invites (single-use codes shared privately; no consent-free "add by email")
+    Route::middleware('throttle:10,1')->group(function () {
+        Route::post('/ledgers/{ledger}/invite', [LedgerController::class, 'invite']);
+        Route::get('/invites/{code}', [LedgerController::class, 'previewInvite']);
+        Route::post('/invites/{code}/accept', [LedgerController::class, 'acceptInvite']);
+    });
     Route::get('ledgers/{ledger}/active-months', [\App\Http\Controllers\Api\TransactionController::class, 'activeMonths']);
     Route::get('ledgers/{ledger}/net-worth-trend', [\App\Http\Controllers\Api\TransactionController::class, 'netWorthTrend']);
 

@@ -9,6 +9,7 @@ class Account extends Model
     // These MUST be listed here or Laravel will ignore them during a 'create' call
     protected $fillable = [
         'ledger_id',
+        'user_id',
         'name',
         'balance',
         'base_balance',
@@ -22,6 +23,11 @@ class Account extends Model
     public function ledger()
     {
         return $this->belongsTo(Ledger::class);
+    }
+
+    public function owner()
+    {
+        return $this->belongsTo(User::class, 'user_id');
     }
 
     public function transactions()

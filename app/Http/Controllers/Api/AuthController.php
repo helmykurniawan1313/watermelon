@@ -26,6 +26,10 @@ class AuthController extends Controller
             'password' => Hash::make($validated['password']),
         ]);
 
+        // Everyone starts with their own private household; a partner can join later with an invite code.
+        $ledger = \App\Models\Ledger::create(['name' => $user->name . "'s household", 'currency' => 'IDR']);
+        $ledger->users()->attach($user->id, ['role' => 'owner']);
+
         // Generate the API token
         $token = $user->createToken('cashew_clone_device')->plainTextToken;
 

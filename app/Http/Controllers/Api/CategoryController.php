@@ -3,9 +3,13 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\ActivityLog;
 use App\Models\Category;
+use App\Models\Installment;
 use App\Models\Ledger;
+use App\Models\Transaction;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class CategoryController extends Controller
 {
@@ -31,10 +35,12 @@ class CategoryController extends Controller
         'icon' => 'required|string',
         'color' => 'required|string',
         'type' => 'nullable|in:income,expense,both',
+        'monthly_budget' => 'nullable|numeric|min:0',
     ]);
 
     // This creates the category ALREADY linked to the ledger from the URL
     $category = $ledger->categories()->create($validated + ['type' => $validated['type'] ?? 'both']);
+    ActivityLog::record($ledger->id, 'created', 'category', $category->id, "added category {$category->name}");
 
     return response()->json($category, 201);
 }
@@ -52,9 +58,11 @@ class CategoryController extends Controller
             'type' => 'nullable|in:income,expense,both',
             'icon' => 'nullable|string',
             'color' => 'nullable|string',
+            'monthly_budget' => 'nullable|numeric|min:0',
         ]);
 
         $category->update($validated);
+        ActivityLog::record($category->ledger_id, 'updated', 'category', $category->id, "edited category {$category->name}");
 
         return response()->json([
             'message' => 'Category updated successfully!',
@@ -69,9 +77,21 @@ class CategoryController extends Controller
     {
         $this->authorizeLedger($category->ledger);
 
-        // Note: You might want to prevent deletion if transactions exist, 
-        // or handle them via cascading deletes in the database.
-        $category->delete();
+        // Cicilan plans reference their category without cascading; deleting would fail.
+        $plans = Installment::where('category_id', $category->id)->pluck('title');
+        if ($plans->isNotEmpty()) {
+            return response()->json([
+                'message' => 'This category is used by cicilan: ' . $plans->implode(', ') . '. Change or delete the cicilan first.',
+            ], 422);
+        }
+
+        // transactions.category_id has no foreign key, so without this the transactions
+        // would keep pointing at a category that no longer exists. Make them uncategorized.
+        DB::transaction(function () use ($category) {
+            Transaction::where('category_id', $category->id)->update(['category_id' => null]);
+            ActivityLog::record($category->ledger_id, 'deleted', 'category', $category->id, "deleted category {$category->name}");
+            $category->delete();
+        });
 
         return response()->json([
             'message' => 'Category deleted successfully!'

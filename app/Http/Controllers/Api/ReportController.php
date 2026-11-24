@@ -27,7 +27,7 @@ class ReportController extends Controller
 
     // 3. Transactions for the selected period
     $transactions = $ledger->transactions()
-        ->with(['category', 'account'])
+        ->with(['category', 'account', 'user:id,name'])
         ->whereMonth('date', $month)
         ->whereYear('date', $year)
         ->orderBy('date', 'desc')

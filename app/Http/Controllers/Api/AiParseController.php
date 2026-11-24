@@ -47,9 +47,40 @@ class AiParseController extends Controller
         }
 
         return response()->json([
-            'draft' => $result,
+            'draft' => $this->sanitizeDraft($result, $accounts, $categories),
             'ai_report' => $attempts,
         ]);
+    }
+
+    /**
+     * The model is told to only use ids from the lists, but nothing guarantees it.
+     * Drop any id that isn't in this ledger, and clamp the other fields to sane values.
+     */
+    private function sanitizeDraft(array $draft, array $accounts, array $categories): array
+    {
+        $accountIds = array_map('intval', array_column($accounts, 'id'));
+        $categoryIds = array_map('intval', array_column($categories, 'id'));
+        $pick = fn ($value, array $allowed) => is_numeric($value) && in_array((int) $value, $allowed, true) ? (int) $value : null;
+
+        $draft['account_id'] = $pick($draft['account_id'], $accountIds);
+        $draft['to_account_id'] = $draft['type'] === 'transfer' ? $pick($draft['to_account_id'], $accountIds) : null;
+        if ($draft['to_account_id'] !== null && $draft['to_account_id'] === $draft['account_id']) {
+            $draft['to_account_id'] = null;
+        }
+        $draft['category_id'] = $draft['type'] === 'transfer' ? null : $pick($draft['category_id'], $categoryIds);
+        $draft['amount'] = abs((float) $draft['amount']);
+
+        try {
+            $draft['date'] = \Carbon\Carbon::parse($draft['date'])->format('Y-m-d H:i:s');
+        } catch (\Throwable $e) {
+            $draft['date'] = now()->format('Y-m-d H:i:s');
+        }
+
+        if (!in_array($draft['confidence'], ['high', 'medium', 'low'], true)) {
+            $draft['confidence'] = 'medium';
+        }
+
+        return $draft;
     }
 
     private function buildPrompt(string $text, array $accounts, array $categories): string
@@ -138,8 +169,9 @@ PROMPT;
         }
 
         try {
-            $response = Http::timeout(15)->post(
-                "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key={$apiKey}",
+            // Key goes in a header, not the URL, so it can't end up in URL/proxy logs.
+            $response = Http::timeout(15)->withHeaders(['x-goog-api-key' => $apiKey])->post(
+                "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent",
                 [
                     'contents' => [
                         ['parts' => [['text' => $prompt]]],

@@ -11,8 +11,13 @@ class Category extends Model
     'icon',
     'color',
     'type',
+    'monthly_budget',
     'ledger_id' // <--- MUST be here
 ];
+
+    protected $casts = [
+        'monthly_budget' => 'float',
+    ];
 
     public function ledger()
     {

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Ledger;
 use App\Models\Installment;
+use App\Models\ActivityLog;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
@@ -35,10 +36,10 @@ class InstallmentController extends Controller
     {
         $validated = $request->validate([
             'title' => 'required|string',
-            'base_price' => 'required|numeric',
-            'duration_months' => 'required|integer',
-            'monthly_amount' => 'required|numeric',
-            'interest_rate' => 'nullable|numeric',
+            'base_price' => 'required|numeric|min:0',
+            'duration_months' => 'required|integer|min:1|max:600',
+            'monthly_amount' => 'required|numeric|min:0',
+            'interest_rate' => 'nullable|numeric|min:0',
             'start_date' => 'required|date',
             'account_id' => 'required|exists:accounts,id',
             'category_id' => 'required|exists:categories,id',
@@ -68,6 +69,8 @@ class InstallmentController extends Controller
             'category_id' => $validated['category_id'],
             'ledger_id' => $validated['ledger_id'],
         ]);
+
+        ActivityLog::record($installment->ledger_id, 'created', 'installment', $installment->id, "added cicilan {$installment->title}");
 
         return response()->json($installment, 201);
     }
@@ -108,6 +111,8 @@ class InstallmentController extends Controller
 
             $installment->paid_amount += $amount;
             $installment->save();
+            ActivityLog::record($installment->ledger_id, 'paid', 'installment', $installment->id,
+                "paid cicilan \"{$installment->title}\" · " . ActivityLog::money($amount));
 
             return response()->json([
                 'message' => 'Payment logged successfully',
@@ -127,6 +132,7 @@ class InstallmentController extends Controller
 
         DB::transaction(function () use ($installment) {
             \App\Models\Transaction::where('installment_id', $installment->id)->delete();
+            ActivityLog::record($installment->ledger_id, 'deleted', 'installment', $installment->id, "deleted cicilan {$installment->title}");
 
             $installment->delete();
         });
@@ -146,10 +152,10 @@ class InstallmentController extends Controller
 
         $validated = $request->validate([
             'title' => 'required|string',
-            'base_price' => 'required|numeric',
-            'duration_months' => 'required|integer', 
-            'monthly_amount' => 'required|numeric',
-            'interest_rate' => 'nullable|numeric',
+            'base_price' => 'required|numeric|min:0',
+            'duration_months' => 'required|integer|min:1|max:600',
+            'monthly_amount' => 'required|numeric|min:0',
+            'interest_rate' => 'nullable|numeric|min:0',
             'start_date' => 'required|date',
             'account_id' => 'required|exists:accounts,id,ledger_id,' . $installment->ledger_id,
             'category_id' => 'required|exists:categories,id,ledger_id,' . $installment->ledger_id,
@@ -168,6 +174,8 @@ class InstallmentController extends Controller
             'account_id' => $validated['account_id'],
             'category_id' => $validated['category_id'],
         ]);
+
+        ActivityLog::record($installment->ledger_id, 'updated', 'installment', $installment->id, "edited cicilan {$installment->title}");
 
         return response()->json($installment);
     }
